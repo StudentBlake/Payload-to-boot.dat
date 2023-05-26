@@ -1,78 +1,59 @@
-##############################################
-# Payload to boot.dat - originally by CTCaer #
-##############################################
-
 import argparse
 import struct
 import hashlib
 from pathlib import Path
 
-"""
-typedef struct boot_dat_hdr
-{
-	unsigned char ident[0x10];
-	unsigned char sha2_s2[0x20];
-	unsigned int s2_dst;
-	unsigned int s2_size;
-	unsigned int s2_enc;
-	unsigned char pad[0x10];
-	unsigned int s3_size;
-	unsigned char pad2[0x90];
-	unsigned char sha2_hdr[0x20];
-} boot_dat_hdr_t;
-"""
+
+def get_sha256_bytes(data):
+    return hashlib.sha256(data).digest()
 
 
-def get_sha256(data):
-    sha256 = hashlib.new("sha256")
-    sha256.update(data)
-    return sha256.digest()
+def create_header(payload_bytes):
+    magic_id = b"CTCaer BOOT\x00"  # Magic ID
+    version = b"V2.5"  # Version 2.5
+    payload_hash = get_sha256_bytes(payload_bytes)  # SHA256 hash of stage2 payload
+    payload_destination = 0x40010000  # Set stage2 payload destination to 0x40010000
+    payload_size = len(payload_bytes)  # Stage2 payload size
+    encryption = 0  # Disable Stage2 encryption
+    padding = b"\x00" * 0xA4  # Add padding (Stage3 size is 0)
+
+    # Pack the header fields into a byte string
+    header = (
+        magic_id
+        + version
+        + payload_hash
+        + struct.pack("I", payload_destination)
+        + struct.pack("I", payload_size)
+        + struct.pack("I", encryption)
+        + padding
+    )
+
+    # Add header's SHA256 hash
+    header += get_sha256_bytes(header)
+
+    return header
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Converts payload to custom boot.dat")
-    parser.add_argument("payload_fn", help="input filename of the payload to convert")
+    parser = argparse.ArgumentParser(
+        description="Converts Switch payload to custom boot.dat"
+    )
     parser.add_argument(
-        "boot_fn",
+        "payload_path", help="input file path of the payload to convert"
+    )
+    parser.add_argument(
+        "bootdat_path",
         nargs="?",
         default="boot.dat",
-        help="output filename of the resulting boot.dat",
+        help="output file path of the resulting boot.dat",
     )
     args = parser.parse_args()
 
-    stage2 = Path(args.payload_fn).read_bytes()
+    payload_bytes = Path(args.payload_path).read_bytes()
+    header = create_header(payload_bytes)
 
-    # Re-create the header.
-    header = b""
-
-    # Magic ID.
-    header += b"\x43\x54\x43\x61\x65\x72\x20\x42\x4F\x4F\x54\x00"
-
-    # Version 2.5.
-    header += b"\x56\x32\x2E\x35"
-
-    # Set sha256 hash of stage2 payload.
-    header += get_sha256(stage2)
-
-    # Set stage2 payload destination to 0x40010000.
-    header += b"\x00\x00\x01\x40"
-
-    # Stage2 payload size.
-    header += struct.pack("I", len(stage2))
-
-    # Disable Stage2 encryption.
-    header += struct.pack("I", 0)
-
-    # Add padding. Stage3 size is 0.
-    header += b"\x00" * 0xA4
-
-    # Add header's sha256 hash.
-    header += get_sha256(header)
-
-    # Write header and the plaintext custom payload.
-    with Path(args.boot_fn).open("wb") as boot:
-        boot.write(header)
-        boot.write(stage2)
+    # Prepend header to payload and write boot.dat
+    Path(args.bootdat_path).write_bytes(header + payload_bytes)
 
 
 if __name__ == "__main__":
